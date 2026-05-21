@@ -1,9 +1,95 @@
 import { Request, Response } from "express";
+
 import prisma from "../config/prisma";
+
 import { createLogSchema } from "../validations/log.validation";
+
 import { generateHash } from "../services/hash.service";
+
 import { verifyChain } from "../services/verify.service";
-import { generateHash } from "../services/hash.service";
+
+export const createLog = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const validatedData = createLogSchema.parse(req.body);
+
+    const lastLog = await prisma.auditLog.findFirst({
+      orderBy: {
+        id: "desc",
+      },
+    });
+
+    const previousHash = lastLog?.currentHash || null;
+
+    const createdAt = new Date();
+
+    const currentHash = generateHash({
+      actor: validatedData.actor,
+      action: validatedData.action,
+      payload: validatedData.payload,
+      previousHash,
+      createdAt,
+    });
+
+    const newLog = await prisma.auditLog.create({
+      data: {
+        actor: validatedData.actor,
+        action: validatedData.action,
+        payload: validatedData.payload,
+        previousHash,
+        currentHash,
+        createdAt,
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Log created successfully",
+      data: newLog,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+export const verifyLogs = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const result = await verifyChain();
+
+    if (!result.valid) {
+      res.status(400).json({
+        success: false,
+        message: "Audit chain verification failed",
+        brokenEntryId: result.brokenEntryId,
+      });
+
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Audit chain verified successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
 
 export const getLogById = async (
   req: Request,
@@ -54,78 +140,30 @@ export const getLogById = async (
   }
 };
 
-export const verifyLogs = async (
+export const exportLogs = async (
   req: Request,
   res: Response
 ): Promise<void> => {
   try {
-    const result = await verifyChain();
+    const actor = req.query.actor as string | undefined;
 
-    if (!result.valid) {
-      res.status(400).json({
-        success: false,
-        message: "Audit chain verification failed",
-        brokenEntryId: result.brokenEntryId,
-      });
+    const action = req.query.action as string | undefined;
 
-      return;
-    }
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        actor: actor || undefined,
+        action: action || undefined,
+      },
+
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
     res.status(200).json({
       success: true,
-      message: "Audit chain verified successfully",
-      data: result,
-    });
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
-  }
-};
-
-export const createLog = async (
-  req: Request,
-  res: Response
-): Promise<void> => {
-  try {
-    const validatedData = createLogSchema.parse(req.body);
-
-    const lastLog = await prisma.auditLog.findFirst({
-      orderBy: {
-        id: "desc",
-      },
-    });
-
-    const previousHash = lastLog?.currentHash || null;
-
-    const createdAt = new Date();
-
-    const currentHash = generateHash({
-      actor: validatedData.actor,
-      action: validatedData.action,
-      payload: validatedData.payload,
-      previousHash,
-      createdAt,
-    });
-
-    const newLog = await prisma.auditLog.create({
-      data: {
-        actor: validatedData.actor,
-        action: validatedData.action,
-        payload: validatedData.payload,
-        previousHash,
-        currentHash,
-        createdAt,
-      },
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "Log created successfully",
-      data: newLog,
+      count: logs.length,
+      data: logs,
     });
   } catch (error) {
     console.error(error);
